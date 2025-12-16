@@ -1,0 +1,8 @@
+flask
+pandas
+requests
+openpyxl
+lxml
+python-dotenv
+html5lib
+beautifulsoup4

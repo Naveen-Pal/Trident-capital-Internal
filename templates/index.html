@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screener Financial Analysis</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+    <div class="container mx-auto px-4 py-8">
+
+        <!-- Header -->
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-bold bg-gradient-to-r from-teal-400 to-blue-500 bg-clip-text text-transparent">
+                Financial Ratio Analyzer
+            </h1>
+            <p class="text-slate-400 mt-2">Analyze Debt/Equity, OPM, and ROCE from Screener.in</p>
+        </header>
+
+        <!-- Input Section -->
+        <div class="glass rounded-xl p-6 mb-8 max-w-2xl mx-auto shadow-2xl">
+            <label class="block text-sm font-medium text-slate-300 mb-2">Company Names (One per line)</label>
+            <textarea id="companyInput" rows="5"
+                class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500 transition"
+                placeholder="Neuland Laboratories&#10;TCS&#10;Infosys"></textarea>
+
+            <div class="mt-4 flex justify-between items-center">
+                <button onclick="analyzeCompanies()" id="analyzeBtn"
+                    class="bg-gradient-to-r from-teal-500 to-blue-600 hover:from-teal-400 hover:to-blue-500 text-white font-semibold py-2 px-6 rounded-lg transition shadow-lg transform active:scale-95">
+                    Analyze Companies
+                </button>
+                <div id="loading" class="hidden flex items-center space-x-2 text-teal-400">
+                    <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none"
+                        viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
+                        </circle>
+                        <path class="opacity-75" fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                        </path>
+                    </svg>
+                    <span>Processing...</span>
+                </div>
+            </div>
+            <div id="errorArea" class="mt-4 hidden text-red-400 text-sm bg-red-900/20 p-2 rounded"></div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="hidden space-y-8">
+
+            <!-- Controls -->
+            <div class="flex justify-end">
+                <button onclick="downloadCSV()" id="downloadBtn"
+                    class="bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg flex items-center space-x-2 transition">
+                    <svg id="downloadIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    <span id="downloadText">Download CSV</span>
+                </button>
+            </div>
+
+            <!-- Data Table -->
+            <div class="glass rounded-xl overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-300">
+                        <thead class="bg-slate-800 text-xs uppercase text-slate-400">
+                            <tr>
+                                <th class="px-6 py-3">Company</th>
+                                <th class="px-6 py-3">Month</th>
+                                <th class="px-6 py-3">D/E</th>
+                                <th class="px-6 py-3">OPM</th>
+                                <th class="px-6 py-3">ROCE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody" class="divide-y divide-slate-700">
+                            <!-- Rows injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        let currentData = [];
+
+        async function analyzeCompanies() {
+            const input = document.getElementById('companyInput').value;
+            const companies = input.split('\n').filter(line => line.trim() !== '');
+            const btn = document.getElementById('analyzeBtn');
+            const loading = document.getElementById('loading');
+            const errorArea = document.getElementById('errorArea');
+            const resultsSection = document.getElementById('resultsSection');
+
+            if (companies.length === 0) {
+                alert("Please enter at least one company name");
+                return;
+            }
+
+            // Reset UI
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            loading.classList.remove('hidden');
+            errorArea.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ companies: companies })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) throw new Error(data.error || 'Unknown error');
+
+                if (data.errors && data.errors.length > 0) {
+                    errorArea.textContent = "Warnings: " + data.errors.join(', ');
+                    errorArea.classList.remove('hidden');
+                }
+
+                if (data.results && data.results.length > 0) {
+                    currentData = data.results;
+                    renderTable(data.results);
+                    resultsSection.classList.remove('hidden');
+                } else if (!data.errors || data.errors.length === 0) {
+                    errorArea.textContent = "No data found for any company.";
+                    errorArea.classList.remove('hidden');
+                }
+
+            } catch (err) {
+                errorArea.textContent = "Error: " + err.message;
+                errorArea.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+                loading.classList.add('hidden');
+            }
+        }
+
+        let companyChartInstances = {};
+
+        function renderTable(data) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+
+            // Group by company for unique rows
+            const uniqueCompanies = [...new Set(data.map(d => d.Company))];
+
+            uniqueCompanies.forEach((company, index) => {
+                // Find latest data point for preview (optional, or just list company)
+                // We'll just list the company in one big row, maybe? 
+                // Or maintain the list of all rows but make them grouped?
+                // User asked for "company wise plot". 
+                // Let's list each company ONCE as a header-like row, 
+                // and maybe show the table data inside the expansion too? or keep the table as is?
+                // "simple company wise plot"
+
+                // Better approach: Keep the full data table as it was (all rows), 
+                // BUT maybe grouped by company visual sections?
+                // Or simply: List Companies. Click -> Show Charts + Data Table for that company.
+                // But the previous table showed ALL months.
+
+                // Let's stick to the previous Table view (All rows mixed or sorted), 
+                // BUT add a "Chart" button next to the Company Name? 
+                // OR duplicate the Company Name row for every data point?
+                // The previous table had `row.Company`, `row.Month`...
+
+                // Let's Group the table VISUALLY.
+                // Row 1: Company Name (Clickable)
+                // Row 2 (Hidden): Charts
+                // Row 3-N: Data Rows for that company
+
+                const companyRows = data.filter(d => d.Company === company);
+
+                // Header Row for Company
+                const trHeader = document.createElement('tr');
+                trHeader.className = "bg-slate-800/80 cursor-pointer hover:bg-slate-700 transition border-b border-slate-700";
+                trHeader.onclick = () => toggleCompany(index, company, companyRows);
+                trHeader.innerHTML = `
+                    <td colspan="5" class="px-6 py-4 font-bold text-teal-400 flex items-center gap-2">
+                        <svg id="arrow-${index}" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        ${company} 
+                        <span class="text-xs text-slate-500 font-normal ml-2">(${companyRows.length} records)</span>
+                    </td>
+                `;
+                tbody.appendChild(trHeader);
+
+                // Hidden Chart Row
+                const trChart = document.createElement('tr');
+                trChart.id = `chart-row-${index}`;
+                trChart.className = "hidden bg-slate-900/50";
+                trChart.innerHTML = `
+                    <td colspan="5" class="p-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-48">
+                            <div class="glass p-2 rounded"><canvas id="canvas-de-${index}"></canvas></div>
+                            <div class="glass p-2 rounded"><canvas id="canvas-opm-${index}"></canvas></div>
+                            <div class="glass p-2 rounded"><canvas id="canvas-roce-${index}"></canvas></div>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(trChart);
+
+                // Data Rows (Initially Hidden too? Or visible? "Simple company wise plot" implies focus on plots.
+                // Let's hide data rows too to keep it clean, expand to see details.)
+                companyRows.forEach(row => {
+                    const trData = document.createElement('tr');
+                    trData.className = `hidden data-row-${index} border-b border-slate-800 hover:bg-slate-800/30`;
+                    trData.innerHTML = `
+                        <td class="px-6 py-3 pl-12 text-slate-400"></td> <!-- Indent -->
+                        <td class="px-6 py-3 text-sm">${row.Month}</td>
+                        <td class="px-6 py-3 text-sm">${formatVal(row.Debt_to_Equity)}</td>
+                        <td class="px-6 py-3 text-sm">${formatPercent(row.Operating_Profit_Margin)}</td>
+                        <td class="px-6 py-3 text-sm">${formatPercent(row.ROCE)}</td>
+                    `;
+                    tbody.appendChild(trData);
+                });
+            });
+        }
+
+        function toggleCompany(index, company, rows) {
+            const chartRow = document.getElementById(`chart-row-${index}`);
+            const dataRows = document.getElementsByClassName(`data-row-${index}`);
+            const arrow = document.getElementById(`arrow-${index}`);
+
+            const isHidden = chartRow.classList.contains('hidden');
+
+            // Toggle Visibility
+            if (isHidden) {
+                chartRow.classList.remove('hidden');
+                arrow.classList.add('rotate-90');
+                Array.from(dataRows).forEach(r => r.classList.remove('hidden'));
+
+                // Render Charts if not already done
+                if (!companyChartInstances[`de-${index}`]) {
+                    renderCompanyCharts(index, rows);
+                }
+            } else {
+                chartRow.classList.add('hidden');
+                arrow.classList.remove('rotate-90');
+                Array.from(dataRows).forEach(r => r.classList.add('hidden'));
+            }
+        }
+
+        function renderCompanyCharts(index, rows) {
+            // Sort rows by Date
+            const sortedRows = [...rows].sort((a, b) => new Date(a.Month) - new Date(b.Month));
+            const labels = sortedRows.map(r => r.Month);
+
+            const createConfig = (label, data, color) => ({
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: label,
+                        data: data,
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, title: { display: true, text: label, color: '#94a3b8' } },
+                    scales: {
+                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                        x: { display: false }
+                    }
+                }
+            });
+
+            // D/E
+            const ctxDE = document.getElementById(`canvas-de-${index}`).getContext('2d');
+            companyChartInstances[`de-${index}`] = new Chart(ctxDE, createConfig('Debt/Equity', sortedRows.map(r => r.Debt_to_Equity), '#14b8a6'));
+
+            // OPM
+            const ctxOPM = document.getElementById(`canvas-opm-${index}`).getContext('2d');
+            companyChartInstances[`opm-${index}`] = new Chart(ctxOPM, createConfig('OPM %', sortedRows.map(r => r.Operating_Profit_Margin * 100), '#3b82f6'));
+
+            // ROCE
+            const ctxROCE = document.getElementById(`canvas-roce-${index}`).getContext('2d');
+            companyChartInstances[`roce-${index}`] = new Chart(ctxROCE, createConfig('ROCE %', sortedRows.map(r => r.ROCE * 100), '#f59e0b'));
+        }
+
+
+        async function downloadCSV() {
+            if (currentData.length === 0) return;
+
+            const btn = document.getElementById('downloadBtn');
+            const icon = document.getElementById('downloadIcon');
+            const text = document.getElementById('downloadText');
+
+            // Loading state
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            text.textContent = "Downloading...";
+            icon.innerHTML = '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>';
+            icon.classList.add('animate-spin');
+            // Remove checkmark path from previous run if any
+            icon.setAttribute('viewBox', '0 0 24 24');
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results: currentData })
+                });
+
+                if (!response.ok) throw new Error('Download failed');
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = 'screener_ratios_pivoted.csv';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+            } catch (err) {
+                alert("Download failed: " + err.message);
+            } finally {
+                // Reset state
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                text.textContent = "Download CSV";
+                icon.classList.remove('animate-spin');
+                // Restore original icon
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>';
+            }
+        }
+
+        function formatVal(val) {
+            return val ? parseFloat(val).toFixed(2) : '-';
+        }
+        function formatPercent(val) {
+            return val ? (parseFloat(val) * 100).toFixed(1) + '%' : '-';
+        }
+
+    </script>
+</body>
+
+</html>
