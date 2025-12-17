@@ -2,6 +2,7 @@ import os
 import io
 import csv
 import pandas as pd
+import xlsxwriter
 from flask import Flask, render_template, request, jsonify, send_file
 from dotenv import load_dotenv
 import logic
@@ -75,98 +76,117 @@ def download():
         if not results:
             return jsonify({"error": "No data to download"}), 400
             
-        # Create DataFrame
-        df = pd.DataFrame(results)
-        
-        # Pivot: 
-        # Index: Company
-        # Columns: Month
-        # Values: Debt_to_Equity, Operating_Profit_Margin, ROCE
-        df_pivot = df.pivot(index="Company", columns="Month", values=["Debt_to_Equity", "Operating_Profit_Margin", "ROCE"])
-        
-        # Swap levels so Month is on top: (Month, Metric)
-        df_pivot.columns = df_pivot.columns.swaplevel(0, 1)
-        
-        # Sort columns by Date
-        # Helper to parse "Mar 2014" -> datetime
-        def parse_month(m):
-            try:
-                return pd.to_datetime(m, format="%b %Y")
-            except:
-                return pd.Timestamp.max # Push errors to end
-
-        # Get unique months and sort them
-        unique_months = sorted(list(set(df_pivot.columns.get_level_values(0))), key=parse_month)
-        
-        # Reindex axis 1 with sorted months
-        # We want order: Month1-MetricA, Month1-MetricB ...
-        # So we sort the MultiIndex by Month (primary) and Metric (secondary)
-        # But sorting text "Mar 2014" alphabetically is wrong.
-        # So we manually construct the desired column order.
-        
-        # Reindex axis 1 with sorted months
-        metrics = ["Debt_to_Equity", "Operating_Profit_Margin", "ROCE"]
-        new_columns = []
-        for m in unique_months:
-            for metric in metrics:
-                if (m, metric) in df_pivot.columns:
-                    new_columns.append((m, metric))
-                    
-        df_pivot = df_pivot.reindex(columns=new_columns)
-
-        # Construct CSV manually for "merged" header effect
-        # Row 1: Company, Month1, , , Month2, , , ...
-        # Row 2: , Metric1, Metric2, Metric3, Metric1, ...
-        
-        # 1. Header Row 1
-        header_row_1 = ["Company"]
-        header_row_2 = [""] # Empty under Company
-        
-        current_month = None
-        for col in df_pivot.columns:
-            month = col[0] # MultiIndex level 0
-            metric = col[1] # MultiIndex level 1
-            
-            # Row 2 always has metric name
-            header_row_2.append(metric)
-            
-            # Row 1 has month only if it changes
-            if month != current_month:
-                header_row_1.append(month)
-                current_month = month
-            else:
-                header_row_1.append("") # Empty for merged look
-        
-        # Write to string buffer
-        si = io.StringIO()
-        writer = csv.writer(si)
-        writer.writerow(header_row_1)
-        writer.writerow(header_row_2)
-        
-        # Write data rows
-        # Index is still Company (index) + MultiIndex columns
-        # Reset index to access Company easily? 
-        # Actually easiest is to iterate.
-        
-        for index, row in df_pivot.iterrows():
-            # index is Company Name
-            csv_row = [index]
-            csv_row.extend(row.tolist())
-            writer.writerow(csv_row)
-        
+        # Create Excel file in memory
         output = io.BytesIO()
-        output.write(si.getvalue().encode('utf-8'))
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        worksheet = workbook.add_worksheet("Ratios")
+
+        # Formats
+        header_fmt = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1})
+        num_fmt = workbook.add_format({'num_format': '0.00'})
+        pct_fmt = workbook.add_format({'num_format': '0.00%'})
+        
+        # Headers
+        headers = ["Company", "Month", "Debt/Equity", "OPM %", "ROCE %"]
+        raw_headers = ["Borrowings", "Equity Capital", "Reserves", "Sales", "Op Profit", "PBT", "Interest"]
+        
+        # Write Main Headers (A-E)
+        for col, h in enumerate(headers):
+            worksheet.write(0, col, h, header_fmt)
+
+        # Write Raw Headers (starting at K -> col 10)
+        RAW_START_COL = 10 
+        for col, h in enumerate(raw_headers):
+            worksheet.write(0, RAW_START_COL + col, "Raw " + h, header_fmt)
+
+        # Prepare data for merging
+        # Assumed results are already sorted/grouped by company from logic.py
+        # But let's be safe and group them if needed or just iterate.
+        
+        # Merge Format
+        merge_fmt = workbook.add_format({
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1
+        })
+        
+        # We need to write data row by row, but merge Company column.
+        # Let's write all data first, then apply merges for Company column.
+        # Or track ranges.
+        
+        current_company = None
+        start_row = 1
+        
+        for row_idx, row_data in enumerate(results, start=1):
+            company = row_data.get("Company")
+            
+            # Write Month and Data (Cols B onwards)
+            worksheet.write(row_idx, 1, row_data.get("Month"))
+            
+            # Raw Data
+            raw_keys = [
+                "Raw_Borrowings", "Raw_Equity_Share_Capital", "Raw_Reserves", 
+                "Raw_Sales", "Raw_Operating_Profit", "Raw_Profit_before_tax", "Raw_Interest"
+            ]
+            
+            for i, key in enumerate(raw_keys):
+                val = row_data.get(key, 0)
+                if val is None: val = 0
+                worksheet.write_number(row_idx, RAW_START_COL + i, float(val), num_fmt)
+
+            # Formulas
+            excel_row = row_idx + 1
+            f_de = f'=IF((L{excel_row}+M{excel_row})<>0, K{excel_row}/(L{excel_row}+M{excel_row}), 0)'
+            worksheet.write_formula(row_idx, 2, f_de, num_fmt)
+
+            f_opm = f'=IF(N{excel_row}<>0, O{excel_row}/N{excel_row}, 0)'
+            worksheet.write_formula(row_idx, 3, f_opm, pct_fmt)
+
+            f_roce = f'=IF((L{excel_row}+M{excel_row}+K{excel_row})<>0, (P{excel_row}+Q{excel_row})/(L{excel_row}+M{excel_row}+K{excel_row}), 0)'
+            worksheet.write_formula(row_idx, 4, f_roce, pct_fmt)
+            
+            # Handle Merging Logic
+            if company != current_company:
+                # If we have a previous company to merge
+                if current_company is not None:
+                    end_row = row_idx - 1
+                    if start_row == end_row:
+                        worksheet.write(start_row, 0, current_company, merge_fmt)
+                    else:
+                        worksheet.merge_range(start_row, 0, end_row, 0, current_company, merge_fmt)
+                
+                # Start new block
+                current_company = company
+                start_row = row_idx
+
+        # Merge the last company/block
+        if current_company is not None:
+            end_row = len(results)
+            if start_row == end_row:
+                worksheet.write(start_row, 0, current_company, merge_fmt)
+            else:
+                worksheet.merge_range(start_row, 0, end_row, 0, current_company, merge_fmt)
+
+        # Adjust widths
+        worksheet.set_column(0, 0, 25) # Company
+        worksheet.set_column(1, 1, 12) # Month
+        worksheet.set_column(2, 4, 12) # Ratios
+        worksheet.set_column(5, 9, 2)  # Spacer (F-J hidden or narrow)
+        worksheet.set_column(10, 20, 15) # Raw Data
+
+        workbook.close()
         output.seek(0)
         
         return send_file(
             output,
-            mimetype="text/csv",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="screener_ratios_pivoted.csv"
+            download_name="screener_ratios.xlsx"
         )
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run()

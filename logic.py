@@ -146,7 +146,18 @@ def calculate_ratios(bs, pnl, company):
                 "Month": col,
                 "Debt_to_Equity": clean_val(debt / equity if equity else None),
                 "Operating_Profit_Margin": clean_val(opm),
-                "ROCE": clean_val(roce)
+                "ROCE": clean_val(roce),
+                
+                # Raw Data for Formulas
+                "Raw_Borrowings": clean_val(debt),
+                "Raw_Equity_Share_Capital": clean_val(bs.at[equity_key, col]), 
+                "Raw_Reserves": clean_val(bs.at["Reserves", col]),
+                "Raw_Sales": clean_val(revenue),
+                "Raw_Operating_Profit": clean_val(op_profit),
+                "Raw_Profit_before_tax": clean_val(pnl.at[pbt_key, col]) if pbt_key else 0,
+                "Raw_Interest": clean_val(pnl.at[int_key, col]) if int_key else 0,
+                "Raw_Tax_Percent": clean_val(pnl.at["Tax %", col]) if "Tax %" in pnl.index else 0,
+                "Raw_Net_Profit": clean_val(pnl.at["Net Profit", col]) if "Net Profit" in pnl.index else 0,
             })
         except KeyError:
             continue

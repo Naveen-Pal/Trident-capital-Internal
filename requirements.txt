@@ -7,3 +7,4 @@ python-dotenv
 html5lib
 beautifulsoup4
 gunicorn
+xlsxwriter
